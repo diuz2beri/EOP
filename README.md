@@ -67,3 +67,5 @@ Run the Apple Silicon dispatcher with `uv run python -m pacificeo.runner --mode 
 - Backend: `uv run pytest` and `uv run ruff check src tests`
 - Dashboard: `cd web && pnpm install && pnpm build`
 - Containers: `docker compose up --build`
+
+The Docker API is exposed locally at `http://localhost:8081` (container port `8080`).
