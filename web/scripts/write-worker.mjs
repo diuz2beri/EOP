@@ -8,8 +8,8 @@ if (!stylesheet || !moduleScript) throw new Error('Vite asset tags were not foun
 const css = await readFile(new URL(`../dist${stylesheet[1]}`, import.meta.url), 'utf8');
 const javascript = await readFile(new URL(`../dist${moduleScript[1]}`, import.meta.url), 'utf8');
 html = html
-  .replace(stylesheet[0], `<style>${css}</style>`)
-  .replace(moduleScript[0], `<script type="module">${javascript.replaceAll('</script>', '<\\/script>')}</script>`);
+  .replace(stylesheet[0], () => `<style>${css}</style>`)
+  .replace(moduleScript[0], () => `<script type="module">${javascript.replaceAll('</script>', '<\\/script>')}</script>`);
 await writeFile(
   new URL('../dist/server/index.js', import.meta.url),
   `const html = ${JSON.stringify(html)};
