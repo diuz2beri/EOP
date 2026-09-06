@@ -1,0 +1,24 @@
+version: 1
+backend:
+  name: prithvi-eo-2.0-100m-tl
+  version: "ibm-nasa-geospatial/Prithvi-EO-2.0-100M-TL"
+  adapter: external-command
+  input_bands: [B02, B03, B04, B05, B06, B07, B8A, B11, B12]
+  temporal_frames: 4
+recipes:
+  coastal-change:
+    head: {type: lightgbm-pixel-classifier, artifact_secret_ref: PACIFICEO_HEAD_COASTAL_CHANGE, version: pacific-v1, classes: [water, intertidal, land]}
+    reference: {default_uri: "https://global-surface-water.appspot.com/download", override_key: coastal_change, attribution: "JRC Global Surface Water; local surveyed shoreline preferred"}
+    validation: {metric: macro_iou, drift_drop: 0.08, minimum_reference_pixels: 500}
+  mangrove-extent:
+    head: {type: lightgbm-pixel-classifier, artifact_secret_ref: PACIFICEO_HEAD_MANGROVE_EXTENT, version: pacific-v1, classes: [other, mangrove]}
+    reference: {default_uri: "https://data.unep-wcmc.org/datasets/45", override_key: mangrove_extent, attribution: "Global Mangrove Watch; local forestry inventory preferred"}
+    validation: {metric: f1, drift_drop: 0.08, minimum_reference_pixels: 250}
+  flood-extent:
+    head: {type: logistic-regression-pixel-classifier, artifact_secret_ref: PACIFICEO_HEAD_FLOOD_EXTENT, version: pacific-v1, classes: [not_flooded, flooded]}
+    reference: {default_uri: "https://global-surface-water.appspot.com/download", override_key: flood_extent, attribution: "Event field/agency polygons preferred; JRC occurrence is context only"}
+    validation: {metric: f1, drift_drop: 0.10, minimum_reference_pixels: 250}
+  vegetation-stress:
+    head: {type: isolation-forest, artifact_secret_ref: PACIFICEO_HEAD_VEGETATION_STRESS, version: pacific-v1, classes: [normal, stressed]}
+    reference: {default_uri: "https://esa-worldcover.org/en/data-access", override_key: vegetation_stress, attribution: "Local crop surveys preferred; ESA WorldCover masks non-vegetated land only"}
+    validation: {metric: balanced_accuracy, drift_drop: 0.10, minimum_reference_pixels: 500}

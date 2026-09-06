@@ -1,0 +1,12 @@
+{
+  "name": "Example island coast",
+  "geometry": {"type": "Polygon", "coordinates": [[[177.9, -17.7], [178.0, -17.7], [178.0, -17.6], [177.9, -17.6], [177.9, -17.7]]]},
+  "cadence_days": 5,
+  "cloud_threshold": 20,
+  "product_recipes": ["coastal-change", "mangrove-extent"],
+  "stac_collections": ["sentinel-2-l2a", "landsat-c2-l2"],
+  "internal_only": false,
+  "stakeholder_emails": [],
+  "stakeholder_imessage_handles": [],
+  "reference_config": {"coastal_change": "s3://tenant-reference/coastline.gpkg"}
+}

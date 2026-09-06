@@ -1,0 +1,16 @@
+services:
+  api:
+    build: .
+    env_file: .env
+    ports: ["8080:8080"]
+    restart: unless-stopped
+  cloud-runner:
+    build: .
+    env_file: .env
+    command: ["sh", "-c", "while true; do python -m pacificeo.runner --mode cloud; sleep 60; done"]
+    restart: unless-stopped
+  notifier:
+    build: .
+    env_file: .env
+    command: ["sh", "-c", "while true; do python -m pacificeo.notifier; sleep 20; done"]
+    restart: unless-stopped
