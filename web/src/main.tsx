@@ -5,11 +5,12 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 
 type Product={id:string;aoi_name:string;recipe:string;status:'draft'|'approved'|'published';accuracy?:{metric:string;value:number};drift?:{flagged:boolean};geometry:{type:string;coordinates:unknown};model_name:string;model_version:string;scene_ids:string[];processed_at:string;cloud_threshold:number};
-const API=sessionStorage.api||import.meta.env.VITE_API_URL||'http://localhost:8081';
+const DEFAULT_API=location.hostname==='localhost'?'http://localhost:8081':'https://eop-peach.vercel.app';
+const API=sessionStorage.api||import.meta.env.VITE_API_URL||DEFAULT_API;
 
 function App(){
  const [token,setToken]=useState(sessionStorage.token||''); const [tenant,setTenant]=useState(sessionStorage.tenant||'');
- const [apiUrl,setApiUrl]=useState(sessionStorage.api||'http://localhost:8081');
+ const [apiUrl,setApiUrl]=useState(sessionStorage.api||DEFAULT_API);
  const [products,setProducts]=useState<Product[]>([]); const [selected,setSelected]=useState<Product>(); const mapNode=useRef<HTMLDivElement>(null); const map=useRef<maplibregl.Map|null>(null);
  async function request(path:string,init?:RequestInit){const r=await fetch(API+path,{...init,headers:{'content-type':'application/json',authorization:`Bearer ${token}`,'x-tenant-id':tenant,...init?.headers}});if(!r.ok)throw new Error(await r.text());return r.json()}
  async function refresh(){if(token&&tenant)setProducts(await request('/api/products'))}
