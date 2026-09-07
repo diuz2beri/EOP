@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from pacificeo.auth import Principal, principal_from_headers
 from pacificeo.db import tenant_session
 from pacificeo.recipe_config import load_catalog
+from pacificeo.scheduler import AoiScheduler
 
 router = APIRouter(prefix="/api")
 
@@ -70,6 +71,33 @@ def provenance(product_id: str, session: Session = Depends(scoped_session)):
 def list_runs(session: Session = Depends(scoped_session)):
     tenant = session.info["principal"].tenant_id
     return [dict(row) for row in session.execute(text("select id::text,aoi_id::text,product_id::text,run_type,runner,status,action,details,auto_fix,started_at,finished_at,created_at from runs where tenant_id=:tenant order by created_at desc limit 500"), {"tenant":tenant}).mappings()]
+
+
+@router.get("/aois")
+def list_aois(session: Session = Depends(scoped_session)):
+    tenant = session.info["principal"].tenant_id
+    rows = session.execute(text("""
+        select id::text,name,cadence_days,cloud_threshold::float,product_recipes,
+               stac_collections,internal_only,enabled,last_scheduled_at,
+               st_asgeojson(geometry)::jsonb geometry
+        from aois where tenant_id=:tenant order by name
+    """), {"tenant": tenant}).mappings()
+    return [dict(row) for row in rows]
+
+
+@router.post("/aois/{aoi_id}/run", status_code=202)
+def run_aoi_now(aoi_id: str, session: Session = Depends(scoped_session)):
+    if session.info["role"] != "admin":
+        raise HTTPException(403, "Admin role required")
+    principal = session.info["principal"]
+    try:
+        return AoiScheduler().run_now(session, principal.tenant_id, aoi_id)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except RuntimeError as exc:
+        if "already running" in str(exc):
+            raise HTTPException(409, str(exc)) from exc
+        raise
 
 
 class ApprovalRequest(BaseModel):

@@ -80,6 +80,59 @@ class AoiScheduler:
                     self._log_failure(session, aoi, exc)
         return scheduled
 
+    def run_now(self, session: Session, tenant_id: str, aoi_id: str) -> dict[str, Any]:
+        """Run a tenant-scoped discovery window immediately and leave an audit record."""
+        locked = session.execute(
+            text("select pg_try_advisory_xact_lock(hashtext(:lock_name))"),
+            {"lock_name": f"pacificeo-manual-{tenant_id}-{aoi_id}"},
+        ).scalar()
+        if not locked:
+            raise RuntimeError("A discovery workflow is already running for this AOI")
+        row = session.execute(
+            text("""
+                select id::text, tenant_id::text, name, st_asgeojson(geometry)::jsonb geometry,
+                       cadence_days, cloud_threshold::float, product_recipes, stac_collections,
+                       null::timestamptz as last_scheduled_at
+                from aois
+                where id=:aoi_id and tenant_id=:tenant_id and enabled
+            """),
+            {"aoi_id": aoi_id, "tenant_id": tenant_id},
+        ).mappings().one_or_none()
+        if row is None:
+            raise LookupError("AOI not found or disabled")
+        aoi = DueAoi(**dict(row))
+        try:
+            scheduled = self._schedule_aoi(session, aoi)
+        except Exception as exc:
+            self._log_failure(session, aoi, exc)
+            raise
+        if scheduled:
+            run = session.execute(
+                text("""
+                    select id::text, status::text, action,
+                           jsonb_array_length(details->'scene_ids') scene_count
+                    from runs
+                    where tenant_id=:tenant_id and aoi_id=:aoi_id and run_type='processing'
+                    order by created_at desc limit 1
+                """),
+                {"tenant_id": tenant_id, "aoi_id": aoi_id},
+            ).mappings().one()
+            return dict(run)
+        run = session.execute(
+            text("""
+                insert into runs
+                  (tenant_id,aoi_id,run_type,runner,status,action,details,started_at,finished_at)
+                values
+                  (:tenant_id,:aoi_id,'scheduler',:runner,'succeeded','no_qualifying_scenes',
+                   jsonb_build_object('cloud_threshold',:cloud_threshold,
+                                      'window_days',:window_days),now(),now())
+                returning id::text,status::text,action,0 scene_count
+            """),
+            {"tenant_id": tenant_id, "aoi_id": aoi_id, "runner": self.settings.runner_name,
+             "cloud_threshold": aoi.cloud_threshold, "window_days": aoi.cadence_days},
+        ).mappings().one()
+        return dict(run)
+
     def _due_aois(self, session: Session) -> list[DueAoi]:
         rows = session.execute(
             text("""
@@ -170,4 +223,3 @@ class AoiScheduler:
                 "message": str(exc)[:2000],
             },
         )
-
