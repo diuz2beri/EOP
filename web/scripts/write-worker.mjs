@@ -13,8 +13,21 @@ html = html
 await writeFile(
   new URL('../dist/server/index.js', import.meta.url),
   `const html = ${JSON.stringify(html)};
+const apiOrigin = 'https://eop-peach.vercel.app';
 export default {
   async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith('/api/') || url.pathname === '/healthz') {
+      const upstream = new URL(url.pathname + url.search, apiOrigin);
+      const headers = new Headers(request.headers);
+      headers.delete('host');
+      return fetch(new Request(upstream, {
+        method: request.method,
+        headers,
+        body: request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
+        redirect: 'manual'
+      }));
+    }
     if (request.method !== 'GET') return new Response('Method not allowed', {status: 405});
     return new Response(html, {headers: {'content-type': 'text/html; charset=utf-8'}});
   }
