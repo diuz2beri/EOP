@@ -6,6 +6,14 @@ import './style.css';
 
 type Product={id:string;aoi_name:string;recipe:string;status:'draft'|'approved'|'published';accuracy?:{metric:string;value:number};drift?:{flagged:boolean};geometry:{type:string;coordinates:unknown};model_name:string;model_version:string;scene_ids:string[];processed_at:string;cloud_threshold:number};
 const DEFAULT_API=location.hostname==='localhost'?'http://localhost:8081':'https://eop-peach.vercel.app';
+const VITI_WAITUI_TENANT='d893dd38-f3ff-4af0-b28f-b876925b1981';
+const authCallback=new URLSearchParams(location.hash.slice(1));
+const callbackToken=authCallback.get('access_token');
+if(callbackToken){
+ sessionStorage.token=callbackToken;
+ sessionStorage.tenant=VITI_WAITUI_TENANT;
+ history.replaceState(null,'',location.pathname+location.search);
+}
 const API=sessionStorage.api||import.meta.env.VITE_API_URL||DEFAULT_API;
 
 function App(){
