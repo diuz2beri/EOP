@@ -1,16 +1,83 @@
 services:
+  db:
+    image: postgis/postgis:17-3.5
+    environment:
+      POSTGRES_DB: pacificeo
+      POSTGRES_USER: pacificeo
+      POSTGRES_PASSWORD: ${PACIFICEO_LOCAL_DB_PASSWORD:?Set PACIFICEO_LOCAL_DB_PASSWORD for local Docker}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pacificeo -d pacificeo"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - pacificeo-db:/var/lib/postgresql/data
+      - ./supabase/local/0000_auth_stub.sql:/docker-entrypoint-initdb.d/0000_auth_stub.sql:ro
+      - ./supabase/migrations/0001_core.sql:/docker-entrypoint-initdb.d/0001_core.sql:ro
+      - ./supabase/migrations/0002_operational_hardening.sql:/docker-entrypoint-initdb.d/0002_operational_hardening.sql:ro
+
   api:
     build: .
-    env_file: .env
+    environment: &api-environment
+      PACIFICEO_DATABASE_URL: postgresql://pacificeo:${PACIFICEO_LOCAL_DB_PASSWORD}@db:5432/pacificeo
+      PACIFICEO_SUPABASE_URL: ""
+      PACIFICEO_SUPABASE_JWT_SECRET: ${PACIFICEO_LOCAL_JWT_SECRET:?Set PACIFICEO_LOCAL_JWT_SECRET for local Docker}
+      PACIFICEO_TITILER_URL: http://titiler:8000
+      PACIFICEO_TILE_SIGNING_SECRET: ${PACIFICEO_LOCAL_TILE_SIGNING_SECRET:?Set PACIFICEO_LOCAL_TILE_SIGNING_SECRET for local Docker}
+      PACIFICEO_TILE_ALLOWED_HOSTS: ${PACIFICEO_TILE_ALLOWED_HOSTS:-sentinel-cogs.s3.us-west-2.amazonaws.com}
+      PACIFICEO_SCHEDULER_ENABLED: "false"
+      PACIFICEO_DASHBOARD_ORIGIN: http://localhost:5173
     ports: ["8081:8080"]
+    depends_on:
+      db:
+        condition: service_healthy
+      titiler:
+        condition: service_started
     restart: unless-stopped
+
+  titiler:
+    image: ghcr.io/developmentseed/titiler:2.2.1
+    command: ["uvicorn", "titiler.application.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    expose: ["8000"]
+    environment:
+      GDAL_DISABLE_READDIR_ON_OPEN: EMPTY_DIR
+      GDAL_HTTP_MERGE_CONSECUTIVE_RANGES: "YES"
+    read_only: true
+    tmpfs: ["/tmp"]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: web
+      dockerfile: Dockerfile
+    environment:
+      VITE_API_URL: http://localhost:8081
+    ports: ["5173:5173"]
+    depends_on:
+      - api
+    restart: unless-stopped
+
   cloud-runner:
     build: .
-    env_file: .env
+    environment:
+      <<: *api-environment
+      PACIFICEO_RUNNER_NAME: cloud
     command: ["sh", "-c", "while true; do python -m pacificeo.runner --mode cloud; sleep 60; done"]
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+
   notifier:
     build: .
-    env_file: .env
+    environment:
+      <<: *api-environment
+      PACIFICEO_RUNNER_NAME: notifier
     command: ["sh", "-c", "while true; do python -m pacificeo.notifier; sleep 20; done"]
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  pacificeo-db:

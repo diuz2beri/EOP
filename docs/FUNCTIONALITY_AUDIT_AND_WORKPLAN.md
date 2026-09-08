@@ -5,16 +5,15 @@
 
 ## Executive finding
 
-PacificEO is a credible service-shell prototype, but it is **not yet operationally review-ready**. Authentication, tenant-scoped API queries, AOI creation, STAC discovery, provenance fields, the draft/approval database guard, and the basic dashboard are present. The live API is healthy and the configured Earth Search collections return real Sentinel-2 and Landsat assets.
+PacificEO is now a **review-ready service shell**, with production activation still dependent on the existing model artifacts, authoritative reference assets, provider credentials, and a persistent cloud runtime. Authentication, tenant-scoped API queries, AOI creation, STAC discovery, protected raster playback, reviewed-product analytics, immutable provenance, human approval/publication, notification retries, and primary/cloud queue leases are implemented and locally verified.
 
 The largest gaps are operational rather than scientific:
 
-1. No production raster-rendering service is configured, so satellite COGs cannot appear as browser map tiles.
-2. The production science adapter and worker are not deployed or connected to the existing model artifacts.
-3. Scheduling relies on a process lifecycle that is unsuitable for a serverless Vercel API, and the current fallback only consumes already-created runs.
-4. Analytics and community modules are interface examples with no live data model or API.
-5. The dashboard offers **Approve** but no **Publish** action, so the official release workflow cannot be completed in the UI.
-6. Notification adapters, delivery retries, tenant storage credentials, observability, CI, and production acceptance tests remain incomplete.
+1. The production science adapter is not yet connected to the existing model/head artifacts.
+2. Per-recipe authoritative reference files and their versions/hashes still need to be supplied.
+3. The Docker cloud runner, private TiTiler, and scheduler need deployment to a persistent cloud runtime; a serverless API process is not a scheduler.
+4. Community intake is still an interface prototype and requires its moderated persistence/upload workflow.
+5. Email and Apple-hosted iMessage provider commands, tenant storage identities, and observability credentials remain to be configured.
 
 No scientific accuracy value should be displayed until a recipe's configured reference intersection passes its minimum-reference-pixel rule. `accuracy: null` must remain a first-class, visible state.
 
@@ -31,7 +30,10 @@ Started on 8 September 2026:
 - Missing dashboard Publish action added as a separate step after human approval.
 - Satellite-context imagery, persistent AOI boundaries, selected-AOI zoom, registered-scene footprints and latest-scene thumbnail/metadata were added. Context imagery is explicitly labelled as separate from dated operational products.
 - Tenant-scoped registered-scene API added at `GET /api/aois/{aoi_id}/scenes`; non-HTTPS preview links are rejected.
-- Current verification: frontend build passed, production container built, nine Python tests passed and Ruff passed (the local Windows mount required ignoring its synthetic executable-bit flag only).
+- Protected product tiles now use short-lived product/tenant tokens, a private TiTiler, and an exact HTTPS source-host allowlist.
+- Published rows are immutable, every product scene must exist in the same tenant, and the provenance endpoint includes scenes, approval ledger entries, and product audit runs.
+- Primary and cloud dispatchers now use an atomic claim plus recoverable leases; notification delivery retries transient failures with bounded exponential backoff.
+- Current verification: frontend builds passed, all local containers started, 13 Python tests passed, Ruff passed (ignoring only the Windows bind-mount executable-bit artifact), and the full local release gates passed.
 
 ## Evidence collected
 
@@ -42,10 +44,10 @@ Started on 8 September 2026:
 | Frontend production build | Pass with warning | TypeScript and Vite build succeeded. Main JavaScript bundle is about 1.51 MB before gzip and should be split. |
 | Python syntax compilation | Pass | `python -m compileall -q src` completed successfully. |
 | Python automated tests | Pass | Nine tests passed inside the built production container, including tenant-scoped scene-preview parameters and unsafe preview-URL filtering. |
-| Docker Compose definition | Pass | `docker compose config --quiet` succeeded with disposable audit placeholders. Containers were not started during this audit. |
-| Satellite catalogue | Pass | Earth Search returned real low-cloud Sentinel-2 COGs over Fiji for 7 September 2026. Both `sentinel-2-l2a` and `landsat-c2-l2` collections resolve. |
-| Satellite visualization | Partial | Labelled Esri World Imagery context, AOI/scene footprints and registered-scene thumbnails now render. `PACIFICEO_TITILER_URL` is still blank by default, so dated product COG playback remains blocked pending a protected tiler. |
-| Analytics | Fail | Values, curves, comparisons and events in `AnalyticsDashboard` are hard-coded examples; filters have no state or API calls. |
+| Docker Compose runtime | Pass | PostGIS, FastAPI, React/Vite and the private TiTiler started locally; the release smoke gate passed. |
+| Satellite catalogue | Pass | Earth Search returned a real Sentinel-2 L2A scene over the Rewa test AOI acquired 7 September 2026 with 12.507947% catalogue cloud cover. |
+| Satellite visualization | Pass locally | That public COG rendered through PacificEO's signed tile broker and private TiTiler as a 28,366-byte image tile. |
+| Analytics | Pass for reviewed EO products | AOI and period filters query approved/published tenant products; missing environmental feeds remain visibly unavailable instead of showing examples. |
 | Community intake | Fail | Form resets locally and shows a success message, but no report or attachment is persisted. |
 
 ## Functional audit by subsystem
@@ -112,7 +114,7 @@ Review gate:
 
 - A reviewer can see qualifying and rejected scenes, footprints, dates, cloud values, collection, STAC link and a true-colour preview before processing.
 
-### 4. Raster visualization and storage — release blocker
+### 4. Raster visualization and storage — local path verified; cloud deployment pending
 
 Present:
 
@@ -121,10 +123,9 @@ Present:
 Gaps:
 
 - A labelled satellite-context basemap is available and is kept visually/semantically separate from dated operational products.
-- `PACIFICEO_TITILER_URL` is not operationally configured.
-- No protected tile broker prevents cross-tenant asset discovery or open-proxy/SSRF abuse.
+- The local private TiTiler and protected tile broker are implemented and verified; the equivalent private cloud service is not deployed yet.
 - Product storage, tenant-scoped upload credentials, object checksums, retention, COG validation and signed read URLs are not implemented in the service shell.
-- The API returns raw `source_href`; private bucket locations should not be exposed directly.
+- Timeline responses no longer expose the product asset URL; authenticated provenance still exposes source records to the owning tenant.
 - The map zooms to a selected AOI; product selection/zoom remains outstanding.
 
 Recommended deployment:
@@ -168,7 +169,7 @@ Review gate:
 
 - Every published product has immutable, downloadable provenance sufficient to reproduce the run, and no missing validation is converted into an invented score.
 
-### 6. Human QA and publishing — database guard strong, UI incomplete
+### 6. Human QA and publishing — core gate complete
 
 Present:
 
@@ -178,25 +179,23 @@ Present:
 
 Gaps:
 
-- Dashboard has an Approve button but no Publish button for approved products.
+- Dashboard provides separate Approve and Publish actions.
 - No reject/request-changes action, review comment editor, side-by-side source/output view or approval confirmation summary.
 - No explicit role label or separation-of-duties option.
 - Internal-only auto-publication has no distinct UI treatment and can be confused with official publication.
-- Published-product immutability covers status but not every provenance/product field.
+- Published-product immutability now covers the complete product row.
 
 Review gate:
 
 - UI demonstrates Draft → Approve (human + comment) → Publish as separate logged actions.
 - Attempts to publish draft, publish cross-tenant, mutate a published product or trigger stakeholder notification without approval all fail.
 
-### 7. Analytics — currently non-functional
+### 7. Analytics — reviewed-product analytics functional; broader indicators planned
 
 Current condition:
 
-- All metric cards and charts are hard-coded illustrative values.
-- Region and period controls do not affect state.
-- No analytics schema, ingestion job or API exists.
-- No chart communicates units, method, source version, coverage, freshness or validation state.
+- Reviewed/published product counts, recipe activity, AOI filters, period filters and latest source-scene facts are live and tenant-scoped.
+- The broader sea-level, temperature, cyclone, coral and forest indicator ingestion model remains planned and must not display invented example values.
 
 Required data model:
 

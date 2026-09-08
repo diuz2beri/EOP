@@ -1,0 +1,9 @@
+.git
+.pytest_cache
+.ruff_cache
+**/__pycache__
+**/*.pyc
+supabase/.temp
+web/node_modules
+web/dist
+web/tsconfig.tsbuildinfo

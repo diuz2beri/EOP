@@ -1,9 +1,10 @@
 import json
 from collections.abc import Iterator
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -13,6 +14,7 @@ from pacificeo.db import SessionLocal, tenant_session
 from pacificeo.recipe_config import load_catalog
 from pacificeo.scheduler import AoiScheduler
 from pacificeo.settings import get_settings
+from pacificeo.tiles import allowed_asset_href, issue_tile_token, verify_tile_token
 
 router = APIRouter(prefix="/api")
 
@@ -33,7 +35,7 @@ def scoped_session(principal: Principal = Depends(principal_from_headers)) -> It
 def _product_query(where: str = "") -> str:
     return f"""
         select p.id::text,p.aoi_id::text,a.name aoi_name,p.recipe,p.model_name,p.model_version,
-               p.scene_ids,p.accuracy,p.drift,p.status,p.asset_href,p.cloud_threshold,
+               p.scene_ids,p.accuracy,p.drift,p.change_summary,p.status,p.asset_href,p.cloud_threshold,
                p.processed_at,p.created_at,p.approved_by::text,p.approved_at,p.published_at,
                st_asgeojson(a.geometry)::jsonb geometry
         from products p join aois a on a.id=p.aoi_id and a.tenant_id=p.tenant_id
@@ -82,7 +84,60 @@ def get_product(product_id: str, session: Session = Depends(scoped_session)):
 @router.get("/products/{product_id}/provenance")
 def provenance(product_id: str, session: Session = Depends(scoped_session)):
     product = get_product(product_id, session)
-    return {key:product[key] for key in ("id","aoi_id","recipe","model_name","model_version","scene_ids","cloud_threshold","processed_at","accuracy","drift","approved_by","approved_at","published_at")}
+    tenant = session.info["principal"].tenant_id
+    scenes = session.execute(
+        text("""
+            select id,sensor,acquired_at,cloud_pct::float,stac_collection,cog_href
+            from scenes
+            where tenant_id=:tenant and id=any(:scene_ids)
+            order by acquired_at
+        """),
+        {"tenant": tenant, "scene_ids": product["scene_ids"]},
+    ).mappings()
+    approvals = session.execute(
+        text("""
+            select reviewer_id::text,decision,comment,created_at
+            from product_approvals
+            where tenant_id=:tenant and product_id=:product
+            order by created_at
+        """),
+        {"tenant": tenant, "product": product_id},
+    ).mappings()
+    audit_runs = session.execute(
+        text("""
+            select id::text,run_type,runner,status::text,action,details,auto_fix,
+                   started_at,finished_at,created_at
+            from runs
+            where tenant_id=:tenant and product_id=:product
+            order by created_at
+        """),
+        {"tenant": tenant, "product": product_id},
+    ).mappings()
+    record = {
+        key: product[key]
+        for key in (
+            "id",
+            "aoi_id",
+            "recipe",
+            "model_name",
+            "model_version",
+            "scene_ids",
+            "cloud_threshold",
+            "processed_at",
+            "created_at",
+            "accuracy",
+            "drift",
+            "change_summary",
+            "status",
+            "approved_by",
+            "approved_at",
+            "published_at",
+        )
+    }
+    record["scenes"] = [dict(row) for row in scenes]
+    record["approvals"] = [dict(row) for row in approvals]
+    record["audit_runs"] = [dict(row) for row in audit_runs]
+    return record
 
 
 @router.get("/runs")
@@ -205,19 +260,74 @@ def product_timeline(aoi_id: str, session: Session = Depends(scoped_session)):
           and p.approved_by is not null and p.approved_at is not null
         order by s.acquired_at, p.created_at, linked.scene_order
     """), {"tenant": tenant, "aoi": aoi_id}).mappings()
-    titiler = get_settings().titiler_url.rstrip("/")
+    settings = get_settings()
     result = []
     for row in rows:
         item = dict(row)
-        source_href = item["asset_href"] or item["cog_href"]
-        item["tile_url"] = (
-            f"{titiler}/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}.png"
-            f"?url={quote(source_href, safe='')}"
-            if titiler and source_href else None
-        )
-        item["source_href"] = source_href
+        item["tile_url"] = None
+        asset_href = item.pop("asset_href", None)
+        if settings.titiler_url and settings.tile_signing_secret and asset_href:
+            try:
+                allowed_asset_href(asset_href, settings.tile_allowed_hosts)
+            except ValueError:
+                pass
+            else:
+                token = issue_tile_token(
+                    item["product_id"], tenant, settings.tile_signing_secret.get_secret_value(),
+                    settings.tile_token_minutes,
+                )
+                item["tile_url"] = (
+                    f"/api/tiles/{item['product_id']}/{{z}}/{{x}}/{{y}}.png?token={token}"
+                )
+        item["asset_available"] = bool(asset_href)
         result.append(item)
     return result
+
+
+@router.get("/tiles/{product_id}/{z}/{x}/{y}.png")
+def product_tile(product_id: UUID, z: int, x: int, y: int, token: str = Query(...)):
+    """Authorize one reviewed product tile, then proxy it through the private tiler."""
+    settings = get_settings()
+    if not settings.titiler_url or not settings.tile_signing_secret:
+        raise HTTPException(503, "Raster tiler is not configured")
+    if not 0 <= z <= 24 or not 0 <= x < 2**z or not 0 <= y < 2**z:
+        raise HTTPException(404, "Tile is outside the supported grid")
+    try:
+        tenant = verify_tile_token(
+            token, str(product_id), settings.tile_signing_secret.get_secret_value(),
+        )
+    except ValueError as exc:
+        raise HTTPException(401, str(exc)) from exc
+    with tenant_session(tenant) as session:
+        asset_href = session.execute(text("""
+            select asset_href from products
+            where id=:product and tenant_id=:tenant and status in ('approved','published')
+              and approved_by is not null and approved_at is not null and asset_href is not null
+        """), {"product": product_id, "tenant": tenant}).scalar_one_or_none()
+    if not asset_href:
+        raise HTTPException(404, "Reviewed product asset not found")
+    try:
+        asset_href = allowed_asset_href(asset_href, settings.tile_allowed_hosts)
+    except ValueError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    tile_endpoint = (
+        f"{settings.titiler_url.rstrip('/')}/cog/tiles/WebMercatorQuad/{z}/{x}/{y}.png"
+    )
+    try:
+        upstream = httpx.get(
+            tile_endpoint,
+            params={"url": asset_href},
+            timeout=30,
+            follow_redirects=False,
+        )
+        upstream.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, "Raster tiler could not render this product") from exc
+    return Response(
+        content=upstream.content,
+        media_type=upstream.headers.get("content-type", "image/png"),
+        headers={"Cache-Control": "private, max-age=120"},
+    )
 
 
 @router.post("/aois/{aoi_id}/run", status_code=202)
@@ -300,11 +410,16 @@ def publish(product_id: str, session: Session = Depends(scoped_session)):
         from aois a where p.id=:id and p.tenant_id=:tenant and p.status='approved'
           and p.approved_by is not null and p.approved_at is not null
           and a.id=p.aoi_id and a.tenant_id=p.tenant_id
-        returning p.id::text,p.recipe,p.accuracy,a.stakeholder_emails,a.stakeholder_imessage_handles
+        returning p.id::text,p.recipe,p.accuracy,p.change_summary,
+                  a.stakeholder_emails,a.stakeholder_imessage_handles
     """), {"id":product_id,"tenant":principal.tenant_id}).mappings().one_or_none()
     if not product:
         raise HTTPException(409, "Product requires logged human approval")
-    summary = {"recipe":product["recipe"],"accuracy":product["accuracy"]}
+    summary = {
+        "recipe": product["recipe"],
+        "change": product["change_summary"],
+        "accuracy": product["accuracy"],
+    }
     for recipient in product["stakeholder_emails"]:
         _queue_notification(session, principal.tenant_id, product_id, "email", recipient, summary)
     for recipient in product["stakeholder_imessage_handles"]:

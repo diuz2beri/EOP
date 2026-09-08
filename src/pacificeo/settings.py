@@ -17,8 +17,12 @@ class Settings(BaseSettings):
     supabase_jwt_secret: SecretStr | None = None
     stac_api_url: str = "https://earth-search.aws.element84.com/v1"
     titiler_url: str = ""
+    tile_signing_secret: SecretStr | None = None
+    tile_allowed_hosts: str = ""
+    tile_token_minutes: int = 5
     scheduler_poll_seconds: int = 60
     primary_grace_minutes: int = 30
+    runner_lease_minutes: int = 120
     scheduler_enabled: bool = True
     runner_name: str = "primary"
     dashboard_origin: str = "http://localhost:5173"

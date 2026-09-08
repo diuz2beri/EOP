@@ -6,15 +6,15 @@ The service shell keeps the existing science behind a manifest-based adapter. It
 
 ## Architecture
 
-- `supabase/migrations/0001_core.sql`: PostGIS model, Supabase membership, RLS, immutable publication rules, approval ledger, and audit/outbox tables.
+- `supabase/migrations`: PostGIS model, Supabase membership/RLS, immutable published products, approval ledger, audit/outbox tables, and atomic worker leases.
 - `src/pacificeo/scheduler.py`: cadence-aware, cloud-filtered STAC discovery. AOIs are read exclusively from Postgres.
 - `src/pacificeo/runner.py`: primary/cloud queue dispatcher. The cloud mode only claims work older than the configured grace window.
 - `src/pacificeo/worker.py`: isolated worker orchestration and provenance creation. Official outputs are always drafts.
 - `src/pacificeo/pipeline.py`: stable JSON manifest contract for the existing preprocess → GeoFM → head pipeline.
-- `src/pacificeo/api.py`: tenant-scoped products, provenance, logs, AOI creation, approval, and publication.
+- `src/pacificeo/api.py`: tenant-scoped products, complete provenance, logs, AOI creation, approval/publication, and signed raster-tile delivery.
 - `src/pacificeo/notifier.py`: email/iMessage outbox delivery after publication.
 - `web`: React/Vite + MapLibre map, review queue, approval/publish actions, and provenance drawer.
-- `docker-compose.yml`: API, notification worker, and cloud fallback runner.
+- `docker-compose.yml`: API, private TiTiler, notification worker, and cloud fallback runner.
 
 ## Pacific recipe profile
 
@@ -32,7 +32,7 @@ The `pacific-v1` head versions are deployment identifiers, not fabricated model 
 ## Local setup
 
 1. Copy `.env.example` to `.env` and set the database and Supabase values.
-2. Apply `supabase/migrations/0001_core.sql` through the Supabase CLI or SQL migration runner.
+2. Apply every SQL file in `supabase/migrations` in filename order through the Supabase CLI or SQL migration runner.
 3. Install with `uv sync --all-groups`.
 4. Run `uv run uvicorn pacificeo.main:app --reload`.
 5. Run tests with `uv run pytest`.
@@ -48,11 +48,12 @@ Set `PACIFICEO_PIPELINE_COMMAND` to a secret-managed executable. The worker appe
 ```json
 {
   "asset_href": "s3://tenant-product-store/product.tif",
-  "validation": {"metric": "f1", "value": 0.87, "reference_pixels": 1842}
+  "validation": {"metric": "f1", "value": 0.87, "reference_pixels": 1842},
+  "change_summary": {"label": "area_changed", "value": 12.4, "unit": "ha"}
 }
 ```
 
-Omit `validation` when no valid reference intersection exists. Product assets should be written with a tenant-scoped, least-privilege push token resolved using `tenant_push_tokens.secret_ref`—never stored in this database or repository.
+Omit `validation` when no valid reference intersection exists, and omit `change_summary` unless it was computed by the existing science pipeline with an explicit unit. Product assets should be written with a tenant-scoped, least-privilege push token resolved using `tenant_push_tokens.secret_ref`—never stored in this database or repository.
 
 ## QA and notification invariant
 
@@ -60,7 +61,11 @@ Official processing creates `draft`. A reviewer must call `approve`, which write
 
 ## Fallback
 
-Run the Apple Silicon dispatcher with `uv run python -m pacificeo.runner --mode primary`. The Docker `cloud-runner` polls the identical queue and invokes the identical worker in a `uv --isolated` environment, but only after `PACIFICEO_PRIMARY_GRACE_MINUTES`. Row locks and the scheduler advisory lock prevent duplicate claims.
+Run the Apple Silicon dispatcher with `uv run python -m pacificeo.runner --mode primary`. The Docker `cloud-runner` polls the identical queue and invokes the identical worker in a `uv --isolated` environment, but only after `PACIFICEO_PRIMARY_GRACE_MINUTES`. An atomic queue claim and time-bounded worker lease prevent the primary and cloud runners from executing the same run; an expired lease makes abandoned work recoverable.
+
+## Raster playback
+
+Reviewed products can expose a COG through the private TiTiler container. The browser only receives a short-lived, product-bound tile URL; the original asset URL is revalidated against `PACIFICEO_TILE_ALLOWED_HOSTS` on every request. Keep TiTiler on the private container network and use exact HTTPS hostnames (or an intentional `*.example.org` wildcard) in the allowlist.
 
 ## Verification
 

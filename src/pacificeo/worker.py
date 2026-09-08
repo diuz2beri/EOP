@@ -17,11 +17,18 @@ def process_run(run_id: str, adapter: ExternalScienceAdapter | None = None) -> l
             select r.id::text, r.tenant_id::text, r.aoi_id::text, r.details,
                    a.cloud_threshold::float, a.reference_config, a.internal_only
             from runs r join aois a on a.id=r.aoi_id and a.tenant_id=r.tenant_id
-            where r.id=:id and r.status='queued' for update of r skip locked
+            where r.id=:id and r.status in ('queued','running') for update of r skip locked
         """), {"id": run_id}).mappings().one_or_none()
         if not run:
             return []
-        session.execute(text("update runs set status='running', started_at=now() where id=:id"), {"id": run_id})
+        session.execute(
+            text("""
+                update runs
+                set status='running', started_at=coalesce(started_at, now())
+                where id=:id
+            """),
+            {"id": run_id},
+        )
         try:
             for recipe_name in run["details"]["recipes"]:
                 recipe = catalog.require(recipe_name)
@@ -33,16 +40,16 @@ def process_run(run_id: str, adapter: ExternalScienceAdapter | None = None) -> l
                 drift = _drift(session, run["tenant_id"], run["aoi_id"], recipe_name, accuracy, cfg["drift_drop"])
                 status = "published" if run["internal_only"] else "draft"
                 product_id = session.execute(text("""
-                    insert into products (tenant_id,aoi_id,recipe,model_name,model_version,scene_ids,accuracy,drift,status,asset_href,cloud_threshold,processed_at,published_at)
-                    values (:tenant_id,:aoi_id,:recipe,:model_name,:model_version,:scene_ids,cast(:accuracy as jsonb),cast(:drift as jsonb),:status,:asset_href,:cloud_threshold,:processed_at,case when :status='published' then :processed_at else null end)
+                    insert into products (tenant_id,aoi_id,recipe,model_name,model_version,scene_ids,accuracy,drift,change_summary,status,asset_href,cloud_threshold,processed_at,published_at)
+                    values (:tenant_id,:aoi_id,:recipe,:model_name,:model_version,:scene_ids,cast(:accuracy as jsonb),cast(:drift as jsonb),cast(:change_summary as jsonb),:status,:asset_href,:cloud_threshold,:processed_at,case when :status='published' then :processed_at else null end)
                     returning id::text
-                """), {"tenant_id":run["tenant_id"],"aoi_id":run["aoi_id"],"recipe":recipe_name,"model_name":catalog.backend["name"],"model_version":catalog.backend["version"],"scene_ids":run["details"]["scene_ids"],"accuracy":json.dumps(accuracy) if accuracy else None,"drift":json.dumps(drift) if drift else None,"status":status,"asset_href":result.asset_href,"cloud_threshold":run["cloud_threshold"],"processed_at":datetime.now(UTC)}).scalar_one()
+                """), {"tenant_id":run["tenant_id"],"aoi_id":run["aoi_id"],"recipe":recipe_name,"model_name":catalog.backend["name"],"model_version":catalog.backend["version"],"scene_ids":run["details"]["scene_ids"],"accuracy":json.dumps(accuracy) if accuracy else None,"drift":json.dumps(drift) if drift else None,"change_summary":json.dumps(result.change_summary) if result.change_summary else None,"status":status,"asset_href":result.asset_href,"cloud_threshold":run["cloud_threshold"],"processed_at":datetime.now(UTC)}).scalar_one()
                 product_ids.append(product_id)
-            session.execute(text("update runs set status='succeeded',action='products_created',details=details||cast(:extra as jsonb),finished_at=now() where id=:id"), {"id":run_id,"extra":json.dumps({"product_ids":product_ids})})
+            session.execute(text("update runs set status='succeeded',action='products_created',details=details||cast(:extra as jsonb),finished_at=now(),lease_expires_at=null where id=:id"), {"id":run_id,"extra":json.dumps({"product_ids":product_ids})})
         except Exception as exc:
             session.rollback()
             with SessionLocal.begin() as failure_session:
-                failure_session.execute(text("update runs set status='failed',action='processing_failed',details=details||cast(:error as jsonb),finished_at=now() where id=:id"), {"id":run_id,"error":json.dumps({"error_type":type(exc).__name__,"message":str(exc)[:2000]})})
+                failure_session.execute(text("update runs set status='failed',action='processing_failed',details=details||cast(:error as jsonb),finished_at=now(),lease_expires_at=null where id=:id"), {"id":run_id,"error":json.dumps({"error_type":type(exc).__name__,"message":str(exc)[:2000]})})
             raise
     return product_ids
 

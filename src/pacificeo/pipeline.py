@@ -12,6 +12,7 @@ from typing import Any
 class PipelineResult:
     asset_href: str
     validation: dict[str, Any] | None
+    change_summary: dict[str, Any] | None = None
 
 
 class ExternalScienceAdapter:
@@ -34,7 +35,10 @@ class ExternalScienceAdapter:
             result = json.loads(output_path.read_text(encoding="utf-8"))
             if not result.get("asset_href"):
                 raise RuntimeError("Science adapter result is missing asset_href")
-            return PipelineResult(result["asset_href"], result.get("validation"))
+            change_summary = result.get("change_summary")
+            if change_summary is not None and not isinstance(change_summary, dict):
+                raise RuntimeError("Science adapter change_summary must be an object")
+            return PipelineResult(result["asset_href"], result.get("validation"), change_summary)
 
 
 def normalize_validation(raw: dict[str, Any] | None, metric: str, minimum_pixels: int) -> dict[str, Any] | None:
