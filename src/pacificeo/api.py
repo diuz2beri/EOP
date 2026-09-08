@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterator
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -10,6 +11,7 @@ from pacificeo.auth import Principal, principal_from_headers, user_from_authoriz
 from pacificeo.db import SessionLocal, tenant_session
 from pacificeo.recipe_config import load_catalog
 from pacificeo.scheduler import AoiScheduler
+from pacificeo.settings import get_settings
 
 router = APIRouter(prefix="/api")
 
@@ -98,6 +100,38 @@ def list_aois(session: Session = Depends(scoped_session)):
         from aois where tenant_id=:tenant order by name
     """), {"tenant": tenant}).mappings()
     return [dict(row) for row in rows]
+
+
+@router.get("/aois/{aoi_id}/timeline")
+def product_timeline(aoi_id: str, session: Session = Depends(scoped_session)):
+    """Return real scene frames from human-approved products for one tenant AOI."""
+    tenant = session.info["principal"].tenant_id
+    rows = session.execute(text("""
+        select p.id::text product_id,p.recipe,p.status::text,p.asset_href,
+               p.model_name,p.model_version,p.accuracy,p.drift,p.approved_at,p.published_at,
+               s.id scene_id,s.sensor,s.acquired_at,s.cloud_pct::float,s.cog_href,
+               s.stac_collection
+        from products p
+        cross join lateral unnest(p.scene_ids) with ordinality linked(scene_id, scene_order)
+        join scenes s on s.tenant_id=p.tenant_id and s.id=linked.scene_id
+        where p.tenant_id=:tenant and p.aoi_id=:aoi
+          and p.status in ('approved','published')
+          and p.approved_by is not null and p.approved_at is not null
+        order by s.acquired_at, p.created_at, linked.scene_order
+    """), {"tenant": tenant, "aoi": aoi_id}).mappings()
+    titiler = get_settings().titiler_url.rstrip("/")
+    result = []
+    for row in rows:
+        item = dict(row)
+        source_href = item["asset_href"] or item["cog_href"]
+        item["tile_url"] = (
+            f"{titiler}/cog/tiles/WebMercatorQuad/{{z}}/{{x}}/{{y}}.png"
+            f"?url={quote(source_href, safe='')}"
+            if titiler and source_href else None
+        )
+        item["source_href"] = source_href
+        result.append(item)
+    return result
 
 
 @router.post("/aois/{aoi_id}/run", status_code=202)

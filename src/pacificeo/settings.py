@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_jwt_secret: SecretStr | None = None
     stac_api_url: str = "https://earth-search.aws.element84.com/v1"
+    titiler_url: str = ""
     scheduler_poll_seconds: int = 60
     primary_grace_minutes: int = 30
     scheduler_enabled: bool = True
