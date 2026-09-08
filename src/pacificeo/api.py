@@ -1,8 +1,9 @@
 import json
 from collections.abc import Iterator
 from urllib.parse import quote
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -88,6 +89,61 @@ def provenance(product_id: str, session: Session = Depends(scoped_session)):
 def list_runs(session: Session = Depends(scoped_session)):
     tenant = session.info["principal"].tenant_id
     return [dict(row) for row in session.execute(text("select id::text,aoi_id::text,product_id::text,run_type,runner,status,action,details,auto_fix,started_at,finished_at,created_at from runs where tenant_id=:tenant order by created_at desc limit 500"), {"tenant":tenant}).mappings()]
+
+
+@router.get("/analytics/summary")
+def analytics_summary(
+    aoi_id: UUID | None = None,
+    days: int = Query(365, ge=1, le=3650),
+    session: Session = Depends(scoped_session),
+):
+    """Return tenant-scoped operational analytics from reviewed products only."""
+    tenant = session.info["principal"].tenant_id
+    aoi_filter = "and p.aoi_id=:aoi" if aoi_id else ""
+    configured_aoi_filter = "and id=:aoi" if aoi_id else ""
+    params = {"tenant": tenant, "aoi": aoi_id, "days": days}
+    summary = session.execute(text(f"""
+        select count(*)::int reviewed_products,
+               count(*) filter (where p.status='published')::int published_products,
+               count(*) filter (where p.accuracy is not null)::int validated_products,
+               count(distinct p.aoi_id)::int aois_with_products,
+               max(p.processed_at) latest_product_at
+        from products p
+        where p.tenant_id=:tenant and p.status in ('approved','published')
+          and p.processed_at >= now() - make_interval(days => :days)
+          {aoi_filter}
+    """), params).mappings().one()
+    configured_aois = session.execute(text(f"""
+        select count(*)::int from aois
+        where tenant_id=:tenant and enabled {configured_aoi_filter}
+    """), params).scalar_one()
+    activity = session.execute(text(f"""
+        select p.id::text,p.aoi_id::text,a.name aoi_name,p.recipe,p.status::text,
+               p.accuracy,p.drift,p.processed_at,p.approved_at,p.published_at
+        from products p join aois a on a.id=p.aoi_id and a.tenant_id=p.tenant_id
+        where p.tenant_id=:tenant and p.status in ('approved','published')
+          and p.processed_at >= now() - make_interval(days => :days)
+          {aoi_filter}
+        order by p.processed_at desc limit 100
+    """), params).mappings()
+    latest_scene = session.execute(text(f"""
+        select s.id scene_id,s.sensor,s.acquired_at,s.cloud_pct::float,
+               s.stac_collection,p.id::text product_id,a.name aoi_name
+        from products p
+        join aois a on a.id=p.aoi_id and a.tenant_id=p.tenant_id
+        cross join lateral unnest(p.scene_ids) linked(scene_id)
+        join scenes s on s.tenant_id=p.tenant_id and s.id=linked.scene_id
+        where p.tenant_id=:tenant and p.status in ('approved','published')
+          and p.processed_at >= now() - make_interval(days => :days)
+          {aoi_filter}
+        order by s.acquired_at desc limit 1
+    """), params).mappings().one_or_none()
+    return {
+        **dict(summary),
+        "configured_aois": configured_aois,
+        "latest_scene": dict(latest_scene) if latest_scene else None,
+        "activity": [dict(row) for row in activity],
+    }
 
 
 @router.get("/aois")

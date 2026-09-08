@@ -7,7 +7,6 @@ import httpx
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from pacificeo.db import SessionLocal
 from pacificeo.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -68,6 +67,8 @@ class AoiScheduler:
 
     def tick(self) -> int:
         """Schedule every due AOI once. Advisory lock prevents primary/fallback duplication."""
+        from pacificeo.db import SessionLocal
+
         scheduled = 0
         with SessionLocal.begin() as session:
             if not session.execute(text("select pg_try_advisory_xact_lock(hashtext('pacificeo-scheduler'))")).scalar():

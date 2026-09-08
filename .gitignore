@@ -6,3 +6,6 @@ __pycache__/
 dist/
 node_modules/
 .pnpm-store/
+pacificeo-site-v*.tar.gz
+.sites-deploy-*/
+supabase/.temp/

@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.12"
+      - name: Install Python dependencies
+        run: uv sync --all-groups
+      - name: Lint
+        run: uv run ruff check src tests
+      - name: Test
+        run: uv run pytest -q
+      - name: Compile
+        run: uv run python -m compileall -q src
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6.1.0
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build frontend
+        run: pnpm build
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build production image
+        run: docker build --tag pacificeo-monitor:audit .

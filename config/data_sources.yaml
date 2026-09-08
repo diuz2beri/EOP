@@ -1,0 +1,70 @@
+version: 1
+policy:
+  accuracy_missing_state: unavailable
+  require_source_version: true
+  require_units: true
+  require_freshness_timestamp: true
+  prohibit_unapproved_composite_indices: true
+
+sources:
+  earth-search:
+    owner: Element 84
+    purpose: Sentinel-2 and Landsat STAC discovery
+    endpoint: https://earth-search.aws.element84.com/v1
+    status: connected
+    collections: [sentinel-2-l2a, landsat-c2-l2]
+    scope: global_with_pacific_aoi_filter
+
+  pacific-data-hub-catalogue:
+    owner: Pacific Community
+    purpose: Pacific regional dataset discovery
+    endpoint: https://pacificdata.org/data/api/3/action
+    documentation: https://docs.pacificdata.org/catalogue/api
+    status: planned
+    scope: pacific
+
+  pacific-data-hub-sdmx:
+    owner: Pacific Community
+    purpose: Approved regional indicators
+    endpoint: https://stats-nsi-stable.pacificdata.org/rest
+    documentation: https://docs.pacificdata.org/dotstat/api
+    status: planned
+    scope: pacific
+
+  noaa-ibtracs:
+    owner: NOAA NCEI
+    purpose: Historical tropical cyclone tracks
+    documentation: https://www.ncei.noaa.gov/products/international-best-track-archive
+    status: planned
+    scope: south_pacific_and_west_pacific
+    caution: Historical/best-track context is not a replacement for official live warnings.
+
+  official-cyclone-warning:
+    owner: Responsible national warning authority
+    purpose: Operational cyclone alerts
+    status: partnership_required
+    priority: Fiji Meteorological Service / RSMC Nadi for the South Pacific
+
+  tide-gauge-network:
+    owner: National authority, PSMSL or UHSLC
+    purpose: Relative sea-level station series
+    status: source_selection_required
+    scope: per_station
+
+  copernicus-marine-sea-level:
+    owner: Copernicus Marine Service
+    purpose: Regional satellite-altimetry context
+    status: credential_and_product_selection_required
+    scope: pacific
+
+  temperature:
+    owner: ECMWF and NOAA
+    purpose: Land-surface and ocean-temperature series
+    status: method_review_required
+    candidates: [ERA5-Land, NOAA OISST]
+
+  local-reference:
+    owner: Tenant-designated ministry, survey or community authority
+    purpose: Per-AOI product validation
+    status: required_per_recipe
+    storage: tenant_scoped_secret_reference
