@@ -6,8 +6,8 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from pacificeo.auth import Principal, principal_from_headers
-from pacificeo.db import tenant_session
+from pacificeo.auth import Principal, principal_from_headers, user_from_authorization
+from pacificeo.db import SessionLocal, tenant_session
 from pacificeo.recipe_config import load_catalog
 from pacificeo.scheduler import AoiScheduler
 
@@ -39,9 +39,24 @@ def _product_query(where: str = "") -> str:
 
 
 @router.get("/me/tenants")
-def list_my_tenants(principal: Principal = Depends(principal_from_headers)):
-    with tenant_session(principal.tenant_id, principal.user_id) as session:
-        return [dict(row) for row in session.execute(text("select t.id::text,t.name,t.slug,tm.role from tenant_members tm join tenants t on t.id=tm.tenant_id where tm.user_id=:user and tm.tenant_id=:tenant"), {"user":principal.user_id,"tenant":principal.tenant_id}).mappings()]
+def list_my_tenants(user_id: str = Depends(user_from_authorization)):
+    """Discover every tenant assigned to the signed-in user."""
+    with SessionLocal.begin() as session:
+        session.execute(
+            text("select set_config('app.user_id', :user_id, true)"),
+            {"user_id": user_id},
+        )
+        rows = session.execute(
+            text("""
+                select t.id::text,t.name,t.slug,tm.role
+                from tenant_members tm
+                join tenants t on t.id=tm.tenant_id
+                where tm.user_id=:user
+                order by t.name
+            """),
+            {"user": user_id},
+        ).mappings()
+        return [dict(row) for row in rows]
 
 
 @router.get("/products")

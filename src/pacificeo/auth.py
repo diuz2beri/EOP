@@ -13,9 +13,8 @@ class Principal:
     tenant_id: str
 
 
-def principal_from_headers(
-    authorization: str = Header(...), x_tenant_id: str = Header(...),
-) -> Principal:
+def user_from_authorization(authorization: str = Header(...)) -> str:
+    """Verify a Supabase access token and return its user id."""
     if not authorization.startswith("Bearer "):
         raise HTTPException(401, "Bearer token required")
     token = authorization[7:]
@@ -45,4 +44,13 @@ def principal_from_headers(
         raise HTTPException(401, "Invalid access token") from exc
     if not claims.get("sub"):
         raise HTTPException(401, "Token subject missing")
-    return Principal(user_id=claims["sub"], tenant_id=x_tenant_id)
+    return str(claims["sub"])
+
+
+def principal_from_headers(
+    authorization: str = Header(...), x_tenant_id: str = Header(...),
+) -> Principal:
+    return Principal(
+        user_id=user_from_authorization(authorization),
+        tenant_id=x_tenant_id,
+    )
