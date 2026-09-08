@@ -1,6 +1,6 @@
 import json
 from collections.abc import Iterator
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -156,6 +156,36 @@ def list_aois(session: Session = Depends(scoped_session)):
         from aois where tenant_id=:tenant order by name
     """), {"tenant": tenant}).mappings()
     return [dict(row) for row in rows]
+
+
+@router.get("/aois/{aoi_id}/scenes")
+def list_aoi_scenes(
+    aoi_id: UUID,
+    limit: int = Query(12, ge=1, le=50),
+    session: Session = Depends(scoped_session),
+):
+    """List real scenes registered by this AOI's acquisition runs for internal preview."""
+    tenant = session.info["principal"].tenant_id
+    rows = session.execute(text("""
+        select * from (
+          select distinct on (s.id) s.id scene_id,s.sensor,s.acquired_at,
+                 s.cloud_pct::float,s.stac_collection,s.stac_item->'geometry' geometry,
+                 s.stac_item->'bbox' bbox,
+                 s.stac_item#>>'{assets,thumbnail,href}' preview_href
+          from runs r
+          cross join lateral jsonb_array_elements_text(r.details->'scene_ids') linked(scene_id)
+          join scenes s on s.tenant_id=r.tenant_id and s.id=linked.scene_id
+          where r.tenant_id=:tenant and r.aoi_id=:aoi and r.run_type='processing'
+          order by s.id,s.acquired_at desc
+        ) registered_scenes
+        order by acquired_at desc limit :limit
+    """), {"tenant": tenant, "aoi": aoi_id, "limit": limit}).mappings()
+    scenes = [dict(row) for row in rows]
+    for scene in scenes:
+        preview = scene["preview_href"]
+        if preview and urlparse(preview).scheme != "https":
+            scene["preview_href"] = None
+    return scenes
 
 
 @router.get("/aois/{aoi_id}/timeline")

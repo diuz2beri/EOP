@@ -29,7 +29,9 @@ Started on 8 September 2026:
 - Tenant-scoped reviewed-product analytics endpoint added at `GET /api/analytics/summary`.
 - Analytics UI changed from hard-coded example values to live approved/published product activity with working AOI and period filters.
 - Missing dashboard Publish action added as a separate step after human approval.
-- Current verification: frontend build passed, production container built, eight Python tests passed and Ruff passed (the local Windows mount required ignoring its synthetic executable-bit flag only).
+- Satellite-context imagery, persistent AOI boundaries, selected-AOI zoom, registered-scene footprints and latest-scene thumbnail/metadata were added. Context imagery is explicitly labelled as separate from dated operational products.
+- Tenant-scoped registered-scene API added at `GET /api/aois/{aoi_id}/scenes`; non-HTTPS preview links are rejected.
+- Current verification: frontend build passed, production container built, nine Python tests passed and Ruff passed (the local Windows mount required ignoring its synthetic executable-bit flag only).
 
 ## Evidence collected
 
@@ -39,10 +41,10 @@ Started on 8 September 2026:
 | Live API contract | Pass, limited | AOI, product, provenance, run, approval, publish and timeline routes are deployed. No analytics, alerts, source-health, notification-admin, community or scene-preview routes exist. |
 | Frontend production build | Pass with warning | TypeScript and Vite build succeeded. Main JavaScript bundle is about 1.51 MB before gzip and should be split. |
 | Python syntax compilation | Pass | `python -m compileall -q src` completed successfully. |
-| Python automated tests | Not executed | Local `uv` and `pytest` are unavailable. This is a release-environment gap, not a test pass. |
+| Python automated tests | Pass | Nine tests passed inside the built production container, including tenant-scoped scene-preview parameters and unsafe preview-URL filtering. |
 | Docker Compose definition | Pass | `docker compose config --quiet` succeeded with disposable audit placeholders. Containers were not started during this audit. |
 | Satellite catalogue | Pass | Earth Search returned real low-cloud Sentinel-2 COGs over Fiji for 7 September 2026. Both `sentinel-2-l2a` and `landsat-c2-l2` collections resolve. |
-| Satellite visualization | Fail | Map uses the MapLibre demo vector style. `PACIFICEO_TITILER_URL` is blank by default, and timeline tiles are emitted only when it is configured. |
+| Satellite visualization | Partial | Labelled Esri World Imagery context, AOI/scene footprints and registered-scene thumbnails now render. `PACIFICEO_TITILER_URL` is still blank by default, so dated product COG playback remains blocked pending a protected tiler. |
 | Analytics | Fail | Values, curves, comparisons and events in `AnalyticsDashboard` are hard-coded examples; filters have no state or API calls. |
 | Community intake | Fail | Form resets locally and shows a success message, but no report or attachment is persisted. |
 
@@ -81,7 +83,7 @@ Gaps:
 
 - No AOI edit, disable, archive or delete API/UI.
 - Geometry is not validated for polygon type, validity, self-intersection, coordinate bounds, antimeridian crossing, vertex count or maximum area.
-- AOIs are not rendered after creation; only product geometries are drawn.
+- AOIs now render after creation and the map fits a selected AOI; edit/disable lifecycle controls remain outstanding.
 - AOI metadata lacks Pacific country/territory code, island group, timezone, local authority, display bounds and reference-data readiness.
 - Reference locations cannot be configured in the dashboard.
 - No confirmation or dry-run shows the expected STAC footprint before saving.
@@ -100,8 +102,8 @@ Present:
 
 Gaps:
 
-- No scene-list or scene-preview API/UI exists.
-- A user receives only a scene count after acquisition, not footprints, thumbnails, source metadata or exclusion reasons.
+- A protected scene-list API and latest-scene preview now expose registered footprints, timestamps, sensor, collection and cloud values; a full selectable scene catalogue is still outstanding.
+- Excluded-scene reasons are not persisted or shown.
 - Scene asset selection is generic. Each collection needs an explicit asset/band policy and signed-URL refresh strategy.
 - No paging beyond the first 100 results and no deduplication policy beyond the database scene key.
 - STAC network retry, backoff, rate-limit handling and source-health monitoring are absent.
@@ -118,12 +120,12 @@ Present:
 
 Gaps:
 
-- The base map is a vector demo map, not satellite context.
+- A labelled satellite-context basemap is available and is kept visually/semantically separate from dated operational products.
 - `PACIFICEO_TITILER_URL` is not operationally configured.
 - No protected tile broker prevents cross-tenant asset discovery or open-proxy/SSRF abuse.
 - Product storage, tenant-scoped upload credentials, object checksums, retention, COG validation and signed read URLs are not implemented in the service shell.
 - The API returns raw `source_href`; private bucket locations should not be exposed directly.
-- The map does not zoom to a selected AOI or product.
+- The map zooms to a selected AOI; product selection/zoom remains outstanding.
 
 Recommended deployment:
 
