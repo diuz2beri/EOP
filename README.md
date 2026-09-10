@@ -80,6 +80,11 @@ The response deliberately labels this as a preview, not a cloud-free mosaic. A c
 annual COG still belongs in the Docker processing runner and must pass the same human QA
 gate before publication.
 
+Tenant admins can request an older calendar year through
+`POST /api/aois/{aoi_id}/years/{year}/discover`. The search uses the AOI's configured
+STAC collections and cloud threshold, creates only missing private drafts, records the
+historical discovery run, and leaves the normal refresh cadence unchanged.
+
 ## Verification
 
 - Backend: `uv run pytest` and `uv run ruff check src tests`

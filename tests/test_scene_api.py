@@ -4,7 +4,9 @@ from uuid import UUID
 
 os.environ.setdefault("PACIFICEO_DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
 
-from pacificeo.api import annual_coverage, list_aoi_scenes
+from fastapi import HTTPException
+
+from pacificeo.api import annual_coverage, discover_aoi_year, list_aoi_scenes
 
 
 class FakeResult:
@@ -72,3 +74,15 @@ def test_annual_coverage_is_tenant_scoped_and_does_not_claim_a_mosaic():
     assert years[0]["display_kind"] == "clearest_approved_scene"
     assert years[1]["coverage_complete"] is False
     assert years[1]["preview_href"] is None
+
+
+def test_historical_discovery_rejects_unsupported_years_before_querying_stac():
+    session = FakeSession([])
+    session.info["role"] = "admin"
+
+    try:
+        discover_aoi_year("aoi-a", 1900, session)
+    except HTTPException as exc:
+        assert exc.status_code == 422
+    else:
+        raise AssertionError("Expected historical year validation to fail")

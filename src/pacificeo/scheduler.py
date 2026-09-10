@@ -136,6 +136,56 @@ class AoiScheduler:
         ).mappings().one()
         return dict(run)
 
+    def discover_year(
+        self, session: Session, tenant_id: str, aoi_id: str, year: int,
+    ) -> dict[str, Any]:
+        """Register a historical calendar year for visual review without changing cadence."""
+        locked = session.execute(
+            text("select pg_try_advisory_xact_lock(hashtext(:lock_name))"),
+            {"lock_name": f"pacificeo-year-{tenant_id}-{aoi_id}-{year}"},
+        ).scalar()
+        if not locked:
+            raise RuntimeError("This historical year is already being discovered")
+        row = session.execute(
+            text("""
+                select id::text, tenant_id::text, name, st_asgeojson(geometry)::jsonb geometry,
+                       cadence_days, cloud_threshold::float, product_recipes, stac_collections,
+                       last_scheduled_at
+                from aois where id=:aoi_id and tenant_id=:tenant_id and enabled
+            """),
+            {"aoi_id": aoi_id, "tenant_id": tenant_id},
+        ).mappings().one_or_none()
+        if row is None:
+            raise LookupError("AOI not found or disabled")
+        aoi = DueAoi(**dict(row))
+        start = datetime(year, 1, 1, tzinfo=UTC)
+        end = datetime(year + 1, 1, 1, tzinfo=UTC)
+        scene_ids = self._discover_and_register(session, aoi, start, end)
+        processed_at = datetime.now(UTC)
+        product_ids = (
+            self._create_visual_frames(session, aoi, scene_ids, processed_at)
+            if scene_ids and "visual-comparison" in aoi.product_recipes else []
+        )
+        session.execute(text("""
+            insert into runs
+              (tenant_id,aoi_id,run_type,runner,status,action,details,started_at,finished_at)
+            values
+              (:tenant,:aoi,'historical-discovery',:runner,'succeeded',:action,
+               jsonb_build_object('year',:year,'scene_ids',cast(:scenes as text[]),
+                                  'visual_product_ids',cast(:products as text[]),
+                                  'cloud_threshold',:cloud),now(),now())
+        """), {
+            "tenant": tenant_id, "aoi": aoi_id, "runner": self.settings.runner_name,
+            "action": "historical_visual_frames_created" if product_ids else "no_new_historical_frames",
+            "year": year, "scenes": scene_ids, "products": product_ids,
+            "cloud": aoi.cloud_threshold,
+        })
+        return {
+            "year": year, "scene_count": len(scene_ids),
+            "visual_product_count": len(product_ids),
+            "action": "historical_visual_frames_created" if product_ids else "no_new_historical_frames",
+        }
+
     def _due_aois(self, session: Session) -> list[DueAoi]:
         rows = session.execute(
             text("""
@@ -155,37 +205,7 @@ class AoiScheduler:
     def _schedule_aoi(self, session: Session, aoi: DueAoi) -> int:
         now = datetime.now(UTC)
         since = aoi.last_scheduled_at or now - timedelta(days=aoi.cadence_days)
-        items = self.stac.search(aoi, since, now)
-        scene_ids: list[str] = []
-        for item in items:
-            properties = item.get("properties", {})
-            cloud_pct = properties.get("eo:cloud_cover")
-            cog_href = extract_cog_href(item)
-            if cloud_pct is None or float(cloud_pct) > aoi.cloud_threshold or not cog_href:
-                continue
-            scene_id = str(item["id"])
-            session.execute(
-                text("""
-                    insert into scenes
-                      (id, tenant_id, sensor, acquired_at, cloud_pct, cog_href, stac_collection, stac_item)
-                    values
-                      (:id, :tenant_id, :sensor, :acquired_at, :cloud_pct, :cog_href, :collection, cast(:item as jsonb))
-                    on conflict (tenant_id, id) do update set
-                      cloud_pct = excluded.cloud_pct, cog_href = excluded.cog_href,
-                      stac_item = excluded.stac_item
-                """),
-                {
-                    "id": scene_id,
-                    "tenant_id": aoi.tenant_id,
-                    "sensor": properties.get("platform", item.get("collection", "unknown")),
-                    "acquired_at": properties["datetime"],
-                    "cloud_pct": float(cloud_pct),
-                    "cog_href": cog_href,
-                    "collection": item.get("collection", "unknown"),
-                    "item": __import__("json").dumps(item),
-                },
-            )
-            scene_ids.append(scene_id)
+        scene_ids = self._discover_and_register(session, aoi, since, now)
 
         if scene_ids:
             visual_product_ids: list[str] = []
@@ -227,6 +247,42 @@ class AoiScheduler:
             {"now": now, "id": aoi.id, "tenant_id": aoi.tenant_id},
         )
         return 1 if scene_ids else 0
+
+    def _discover_and_register(
+        self, session: Session, aoi: DueAoi, since: datetime, until: datetime,
+    ) -> list[str]:
+        items = self.stac.search(aoi, since, until)
+        scene_ids: list[str] = []
+        for item in items:
+            properties = item.get("properties", {})
+            cloud_pct = properties.get("eo:cloud_cover")
+            cog_href = extract_cog_href(item)
+            if cloud_pct is None or float(cloud_pct) > aoi.cloud_threshold or not cog_href:
+                continue
+            scene_id = str(item["id"])
+            session.execute(
+                text("""
+                    insert into scenes
+                      (id, tenant_id, sensor, acquired_at, cloud_pct, cog_href, stac_collection, stac_item)
+                    values
+                      (:id, :tenant_id, :sensor, :acquired_at, :cloud_pct, :cog_href, :collection, cast(:item as jsonb))
+                    on conflict (tenant_id, id) do update set
+                      cloud_pct = excluded.cloud_pct, cog_href = excluded.cog_href,
+                      stac_item = excluded.stac_item
+                """),
+                {
+                    "id": scene_id,
+                    "tenant_id": aoi.tenant_id,
+                    "sensor": properties.get("platform", item.get("collection", "unknown")),
+                    "acquired_at": properties["datetime"],
+                    "cloud_pct": float(cloud_pct),
+                    "cog_href": cog_href,
+                    "collection": item.get("collection", "unknown"),
+                    "item": __import__("json").dumps(item),
+                },
+            )
+            scene_ids.append(scene_id)
+        return scene_ids
 
     def _create_visual_frames(
         self, session: Session, aoi: DueAoi, scene_ids: list[str], processed_at: datetime,

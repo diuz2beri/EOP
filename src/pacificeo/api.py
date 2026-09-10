@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -413,6 +414,25 @@ def run_aoi_now(aoi_id: str, session: Session = Depends(scoped_session)):
         raise HTTPException(404, str(exc)) from exc
     except RuntimeError as exc:
         if "already running" in str(exc):
+            raise HTTPException(409, str(exc)) from exc
+        raise
+
+
+@router.post("/aois/{aoi_id}/years/{year}/discover", status_code=202)
+def discover_aoi_year(
+    aoi_id: str, year: int, session: Session = Depends(scoped_session),
+):
+    if session.info["role"] != "admin":
+        raise HTTPException(403, "Admin role required")
+    if year < 1984 or year > datetime.now(UTC).year:
+        raise HTTPException(422, "Year must be between 1984 and the current year")
+    principal = session.info["principal"]
+    try:
+        return AoiScheduler().discover_year(session, principal.tenant_id, aoi_id, year)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except RuntimeError as exc:
+        if "already being discovered" in str(exc):
             raise HTTPException(409, str(exc)) from exc
         raise
 
