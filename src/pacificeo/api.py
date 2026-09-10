@@ -259,7 +259,8 @@ def product_timeline(aoi_id: str, session: Session = Depends(scoped_session)):
         select p.id::text product_id,p.recipe,p.status::text,p.asset_href,
                p.model_name,p.model_version,p.accuracy,p.drift,p.approved_at,p.published_at,
                s.id scene_id,s.sensor,s.acquired_at,s.cloud_pct::float,s.cog_href,
-               s.stac_collection
+               s.stac_collection,s.stac_item#>>'{assets,thumbnail,href}' preview_href,
+               s.stac_item->'bbox' bbox
         from products p
         cross join lateral unnest(p.scene_ids) with ordinality linked(scene_id, scene_order)
         join scenes s on s.tenant_id=p.tenant_id and s.id=linked.scene_id
@@ -273,6 +274,8 @@ def product_timeline(aoi_id: str, session: Session = Depends(scoped_session)):
     result = []
     for row in rows:
         item = dict(row)
+        if item.get("preview_href") and urlparse(item["preview_href"]).scheme != "https":
+            item["preview_href"] = None
         item["tile_url"] = None
         asset_href = item.pop("asset_href", None)
         if settings.titiler_url and settings.tile_signing_secret and asset_href:
