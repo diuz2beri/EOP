@@ -296,6 +296,66 @@ def product_timeline(aoi_id: str, session: Session = Depends(scoped_session)):
     return result
 
 
+@router.get("/aois/{aoi_id}/annual-coverage")
+def annual_coverage(aoi_id: UUID, session: Session = Depends(scoped_session)):
+    """Summarise reviewed visual scenes by year without pretending they are mosaics."""
+    tenant = session.info["principal"].tenant_id
+    rows = session.execute(text("""
+        with reviewed as (
+          select distinct p.id product_id,p.status::text,p.approved_at,p.published_at,
+                 s.id scene_id,s.sensor,s.acquired_at,s.cloud_pct::float,s.stac_collection,
+                 s.stac_item,s.cog_href,a.geometry aoi_geometry,
+                 extract(year from s.acquired_at)::int acquisition_year
+          from products p
+          join aois a on a.id=p.aoi_id and a.tenant_id=p.tenant_id
+          cross join lateral unnest(p.scene_ids) linked(scene_id)
+          join scenes s on s.tenant_id=p.tenant_id and s.id=linked.scene_id
+          where p.tenant_id=:tenant and p.aoi_id=:aoi
+            and p.recipe='visual-comparison'
+            and p.status in ('approved','published')
+            and p.approved_by is not null and p.approved_at is not null
+        ), ranked as (
+          select reviewed.*,
+                 row_number() over (
+                   partition by acquisition_year
+                   order by cloud_pct, acquired_at desc, scene_id
+                 ) clarity_rank
+          from reviewed
+        ), coverage as (
+          select acquisition_year,count(*)::int scene_count,
+                 least(100.0, greatest(0.0,
+                   100.0 * st_area(st_intersection(
+                     st_unaryunion(st_collect(
+                       st_setsrid(st_geomfromgeojson(stac_item->>'geometry'),4326)
+                     )), (array_agg(aoi_geometry))[1]
+                   )::geography) / nullif(st_area((array_agg(aoi_geometry))[1]::geography),0)
+                 ))::float coverage_pct,
+                 min(acquired_at) period_start,max(acquired_at) period_end
+          from reviewed
+          where stac_item ? 'geometry' and stac_item->'geometry' is not null
+          group by acquisition_year
+        )
+        select r.acquisition_year year,c.scene_count,c.coverage_pct,c.period_start,c.period_end,
+               r.product_id::text,r.status,r.approved_at,r.published_at,r.scene_id,
+               r.sensor,r.acquired_at,r.cloud_pct,r.stac_collection,
+               r.stac_item#>>'{assets,thumbnail,href}' preview_href,
+               r.stac_item->'bbox' bbox
+        from ranked r join coverage c using (acquisition_year)
+        where r.clarity_rank=1
+        order by r.acquisition_year
+    """), {"tenant": tenant, "aoi": aoi_id}).mappings()
+    result = []
+    for row in rows:
+        item = dict(row)
+        preview = item.get("preview_href")
+        if preview and urlparse(preview).scheme != "https":
+            item["preview_href"] = None
+        item["coverage_complete"] = item["coverage_pct"] >= 99.5
+        item["display_kind"] = "clearest_approved_scene"
+        result.append(item)
+    return result
+
+
 @router.get("/tiles/{product_id}/{z}/{x}/{y}.png")
 def product_tile(product_id: UUID, z: int, x: int, y: int, token: str = Query(...)):
     """Authorize one reviewed product tile, then proxy it through the private tiler."""

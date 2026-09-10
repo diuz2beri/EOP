@@ -73,6 +73,13 @@ Run the Apple Silicon dispatcher with `uv run python -m pacificeo.runner --mode 
 
 Reviewed products can expose a COG through the private TiTiler container. The browser only receives a short-lived, product-bound tile URL; the original asset URL is revalidated against `PACIFICEO_TILE_ALLOWED_HOSTS` on every request. Keep TiTiler on the private container network and use exact HTTPS hostnames (or an intentional `*.example.org` wildcard) in the allowlist.
 
+The map also provides an annual comparison view. `/api/aois/{aoi_id}/annual-coverage`
+groups human-approved visual scenes by acquisition year, calculates real AOI footprint
+coverage in PostGIS, and chooses the lowest-cloud approved scene as that year's preview.
+The response deliberately labels this as a preview, not a cloud-free mosaic. A complete
+annual COG still belongs in the Docker processing runner and must pass the same human QA
+gate before publication.
+
 ## Verification
 
 - Backend: `uv run pytest` and `uv run ruff check src tests`

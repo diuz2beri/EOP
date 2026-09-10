@@ -4,7 +4,7 @@ from uuid import UUID
 
 os.environ.setdefault("PACIFICEO_DATABASE_URL", "postgresql+psycopg://test:test@localhost/test")
 
-from pacificeo.api import list_aoi_scenes
+from pacificeo.api import annual_coverage, list_aoi_scenes
 
 
 class FakeResult:
@@ -46,3 +46,29 @@ def test_list_aoi_scenes_is_tenant_scoped_and_filters_unsafe_preview_urls():
     assert session.params == {"tenant": "tenant-a", "aoi": aoi_id, "limit": 12}
     assert scenes[0]["preview_href"] == "https://example.test/preview.jpg"
     assert scenes[1]["preview_href"] is None
+
+
+def test_annual_coverage_is_tenant_scoped_and_does_not_claim_a_mosaic():
+    session = FakeSession(
+        [
+            {
+                "year": 2025,
+                "coverage_pct": 100.0,
+                "preview_href": "https://example.test/preview.jpg",
+            },
+            {
+                "year": 2026,
+                "coverage_pct": 78.4,
+                "preview_href": "http://example.test/preview.jpg",
+            },
+        ]
+    )
+    aoi_id = UUID("11111111-1111-1111-1111-111111111111")
+
+    years = annual_coverage(aoi_id, session)
+
+    assert session.params == {"tenant": "tenant-a", "aoi": aoi_id}
+    assert years[0]["coverage_complete"] is True
+    assert years[0]["display_kind"] == "clearest_approved_scene"
+    assert years[1]["coverage_complete"] is False
+    assert years[1]["preview_href"] is None
