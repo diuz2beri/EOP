@@ -16,4 +16,13 @@ def test_invalid_accuracy_is_rejected():
 
 def test_pacific_recipe_catalog_is_complete():
     catalog = load_catalog()
-    assert {"coastal-change","mangrove-extent","flood-extent","vegetation-stress"} <= catalog.recipes.keys()
+    assert {
+        "visual-comparison",
+        "coastal-change",
+        "mangrove-extent",
+        "flood-extent",
+        "vegetation-stress",
+    } <= catalog.recipes.keys()
+    visual = catalog.require("visual-comparison")
+    assert visual["kind"] == "public-imagery-frame"
+    assert visual["head"]["artifact_secret_ref"] is None

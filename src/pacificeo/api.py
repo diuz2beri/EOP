@@ -37,8 +37,16 @@ def _product_query(where: str = "") -> str:
         select p.id::text,p.aoi_id::text,a.name aoi_name,p.recipe,p.model_name,p.model_version,
                p.scene_ids,p.accuracy,p.drift,p.change_summary,p.status,p.asset_href,p.cloud_threshold,
                p.processed_at,p.created_at,p.approved_by::text,p.approved_at,p.published_at,
+               source.acquired_at source_acquired_at,source.sensor source_sensor,
+               source.cloud_pct::float source_cloud_pct,
                st_asgeojson(a.geometry)::jsonb geometry
         from products p join aois a on a.id=p.aoi_id and a.tenant_id=p.tenant_id
+        left join lateral (
+          select s.acquired_at,s.sensor,s.cloud_pct
+          from unnest(p.scene_ids) linked(scene_id)
+          join scenes s on s.tenant_id=p.tenant_id and s.id=linked.scene_id
+          order by s.acquired_at limit 1
+        ) source on true
         where p.tenant_id=:tenant {where}
     """
 
@@ -256,6 +264,7 @@ def product_timeline(aoi_id: str, session: Session = Depends(scoped_session)):
         cross join lateral unnest(p.scene_ids) with ordinality linked(scene_id, scene_order)
         join scenes s on s.tenant_id=p.tenant_id and s.id=linked.scene_id
         where p.tenant_id=:tenant and p.aoi_id=:aoi
+          and p.recipe='visual-comparison'
           and p.status in ('approved','published')
           and p.approved_by is not null and p.approved_at is not null
         order by s.acquired_at, p.created_at, linked.scene_order

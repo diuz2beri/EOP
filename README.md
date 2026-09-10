@@ -20,6 +20,7 @@ The service shell keeps the existing science behind a manifest-based adapter. It
 
 `config/recipes.yaml` uses IBM/NASA Prithvi-EO-2.0 100M TL as the common embedding backend, with recipe-specific classical heads:
 
+- visual comparison — deterministic public STAC imagery frames; no model or accuracy claim
 - coastal change — LightGBM pixel classifier; macro IoU
 - mangrove extent — LightGBM pixel classifier; F1
 - flood extent — logistic-regression pixel classifier; F1
@@ -28,6 +29,11 @@ The service shell keeps the existing science behind a manifest-based adapter. It
 JRC Global Surface Water, Global Mangrove Watch, and ESA WorldCover are bootstrap/reference-context sources. Per-AOI `reference_config` values override them and should point to authoritative local ministry, survey, or community datasets. Insufficient or absent reference coverage produces `accuracy: null`; the service never synthesizes a value.
 
 The `pacific-v1` head versions are deployment identifiers, not fabricated model artifacts. Their actual artifact locations remain secret references (`PACIFICEO_HEAD_*`) supplied to the existing science adapter.
+
+The visual-comparison recipe is operational without a science adapter. Each qualifying public
+Sentinel-2 or Landsat visual COG becomes a private draft linked to exactly one source scene. A
+reviewer must approve the frame before it appears in playback. Re-running an AOI does not create
+duplicate frames for a scene already registered to that AOI.
 
 ## Local setup
 

@@ -111,7 +111,9 @@ class AoiScheduler:
             run = session.execute(
                 text("""
                     select id::text, status::text, action,
-                           jsonb_array_length(details->'scene_ids') scene_count
+                           jsonb_array_length(details->'scene_ids') scene_count,
+                           coalesce(jsonb_array_length(details->'visual_product_ids'),0)
+                             visual_product_count
                     from runs
                     where tenant_id=:tenant_id and aoi_id=:aoi_id and run_type='processing'
                     order by created_at desc limit 1
@@ -127,7 +129,7 @@ class AoiScheduler:
                   (:tenant_id,:aoi_id,'scheduler',:runner,'succeeded','no_qualifying_scenes',
                    jsonb_build_object('cloud_threshold',:cloud_threshold,
                                       'window_days',:window_days),now(),now())
-                returning id::text,status::text,action,0 scene_count
+                returning id::text,status::text,action,0 scene_count,0 visual_product_count
             """),
             {"tenant_id": tenant_id, "aoi_id": aoi_id, "runner": self.settings.runner_name,
              "cloud_threshold": aoi.cloud_threshold, "window_days": aoi.cadence_days},
@@ -186,21 +188,38 @@ class AoiScheduler:
             scene_ids.append(scene_id)
 
         if scene_ids:
+            visual_product_ids: list[str] = []
+            if "visual-comparison" in aoi.product_recipes:
+                visual_product_ids = self._create_visual_frames(session, aoi, scene_ids, now)
+            science_recipes = [
+                recipe for recipe in aoi.product_recipes if recipe != "visual-comparison"
+            ]
+            visual_only = not science_recipes
             session.execute(
                 text("""
-                    insert into runs (tenant_id, aoi_id, run_type, runner, action, details)
-                    values (:tenant_id, :aoi_id, 'processing', :runner, 'scenes_registered',
+                    insert into runs
+                      (tenant_id, aoi_id, run_type, runner, status, action, details,
+                       started_at, finished_at)
+                    values (:tenant_id, :aoi_id, 'processing', :runner,
+                            case when :visual_only then 'succeeded'::run_status else 'queued'::run_status end,
+                            case when :visual_only then 'visual_frames_created' else 'scenes_registered' end,
                             jsonb_build_object('scene_ids', cast(:scene_ids as text[]),
                                                'recipes', cast(:recipes as text[]),
-                                               'cloud_threshold', :cloud_threshold))
+                                               'visual_product_ids', cast(:visual_product_ids as text[]),
+                                               'cloud_threshold', :cloud_threshold),
+                            case when :visual_only then :processed_at else null end,
+                            case when :visual_only then :processed_at else null end)
                 """),
                 {
                     "tenant_id": aoi.tenant_id,
                     "aoi_id": aoi.id,
                     "runner": self.settings.runner_name,
                     "scene_ids": scene_ids,
-                    "recipes": aoi.product_recipes,
+                    "recipes": science_recipes,
+                    "visual_product_ids": visual_product_ids,
+                    "visual_only": visual_only,
                     "cloud_threshold": aoi.cloud_threshold,
+                    "processed_at": now,
                 },
             )
         session.execute(
@@ -208,6 +227,37 @@ class AoiScheduler:
             {"now": now, "id": aoi.id, "tenant_id": aoi.tenant_id},
         )
         return 1 if scene_ids else 0
+
+    def _create_visual_frames(
+        self, session: Session, aoi: DueAoi, scene_ids: list[str], processed_at: datetime,
+    ) -> list[str]:
+        """Create one private draft per public visual scene without invoking an AI model."""
+        rows = session.execute(
+            text("""
+                insert into products
+                  (tenant_id,aoi_id,recipe,model_name,model_version,scene_ids,accuracy,
+                   drift,status,asset_href,cloud_threshold,processed_at)
+                select :tenant_id,:aoi_id,'visual-comparison','deterministic-stac-renderer',
+                       'stac-visual-v1',array[s.id]::text[],null,null,'draft',s.cog_href,
+                       :cloud_threshold,:processed_at
+                from scenes s
+                where s.tenant_id=:tenant_id and s.id=any(:scene_ids)
+                  and not exists (
+                    select 1 from products p
+                    where p.tenant_id=:tenant_id and p.aoi_id=:aoi_id
+                      and p.recipe='visual-comparison' and p.scene_ids=array[s.id]::text[]
+                  )
+                returning id::text
+            """),
+            {
+                "tenant_id": aoi.tenant_id,
+                "aoi_id": aoi.id,
+                "scene_ids": scene_ids,
+                "cloud_threshold": aoi.cloud_threshold,
+                "processed_at": processed_at,
+            },
+        ).scalars()
+        return list(rows)
 
     def _log_failure(self, session: Session, aoi: DueAoi, exc: Exception) -> None:
         session.execute(

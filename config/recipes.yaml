@@ -6,6 +6,11 @@ backend:
   input_bands: [B02, B03, B04, B05, B06, B07, B8A, B11, B12]
   temporal_frames: 4
 recipes:
+  visual-comparison:
+    kind: public-imagery-frame
+    head: {type: deterministic-render, artifact_secret_ref: null, version: stac-visual-v1, classes: []}
+    reference: {default_uri: null, override_key: visual_comparison, attribution: "Source satellite provider and STAC catalogue"}
+    validation: {metric: not_applicable, drift_drop: 1.0, minimum_reference_pixels: 0}
   coastal-change:
     head: {type: lightgbm-pixel-classifier, artifact_secret_ref: PACIFICEO_HEAD_COASTAL_CHANGE, version: pacific-v1, classes: [water, intertidal, land]}
     reference: {default_uri: "https://global-surface-water.appspot.com/download", override_key: coastal_change, attribution: "JRC Global Surface Water; local surveyed shoreline preferred"}
